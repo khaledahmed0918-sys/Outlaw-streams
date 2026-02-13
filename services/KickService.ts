@@ -1,20 +1,25 @@
 import type { Channel, KickApiResponse } from '../types';
 
 // --- IMPORTANT ---
-// This is a client-side implementation and is NOT recommended for production.
-// A backend proxy should be used to handle API keys, caching, and rate limits to avoid CORS issues and exposure of secrets.
-// This implementation is for demonstration purposes only.
+// This is a client-side implementation.
+// Kick's API is protected by Cloudflare. Direct client-side calls often fail (CORS).
+// We use a rotation of CORS proxies to attempt to bypass this.
 
-const DEFAULT_PROFILE_PIC = 'https://picsum.photos/150/150'; // Fallback
+const DEFAULT_PROFILE_PIC = 'https://picsum.photos/150/150';
+
+// List of proxies to try in order. 
+// "corsproxy.io" is usually best but can be blocked.
+// "api.allorigins.win" is a good fallback.
+const PROXY_LIST = [
+    (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+];
 
 /**
  * Extracts a clean username from a string, which can be a username or a full Kick URL.
- * @param input The string to parse.
- * @returns The extracted username.
  */
 export const extractUsername = (input: string): string => {
     if (input.includes('kick.com/')) {
-        // Find the last part of the path, removing query params or fragments
         return input.split('/').pop()?.split('?')[0].split('#')[0] || input;
     }
     return input;
@@ -27,7 +32,12 @@ const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout 
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeout);
     try {
-        const response = await fetch(url, { ...options, signal: controller.signal });
+        const response = await fetch(url, { 
+            ...options, 
+            signal: controller.signal,
+            // Try to avoid sending referrer to keep traffic looking cleaner to the proxy
+            referrerPolicy: 'no-referrer' 
+        });
         clearTimeout(id);
         return response;
     } catch (error) {
@@ -37,119 +47,20 @@ const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout 
 };
 
 /**
- * Fetches data for a single Kick channel, preserving the original username case.
- * @param originalUsername The Kick username with its intended capitalization.
- * @returns A Promise that resolves to a Channel object.
+ * Returns a default/error channel object to prevent UI crashes
  */
-export const fetchKickChannel = async (originalUsername: string): Promise<Channel> => {
-  // Use CORS proxy for the main API call to avoid browser blocks
-  const targetUrl = `https://kick.com/api/v1/channels/${originalUsername}?_=${Date.now()}`;
-  const url = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
-  
-  try {
-    const response = await fetchWithTimeout(url, {}, 8000); // 8s timeout
-
-    if (response.status === 404) {
-       return {
-          username: originalUsername,
-          display_name: originalUsername,
-          profile_pic: DEFAULT_PROFILE_PIC,
-          is_live: false,
-          live_title: null,
-          viewer_count: null,
-          live_since: null,
-          last_stream_start_time: null,
-          live_url: `https://kick.com/${originalUsername}`,
-          profile_url: `https://kick.com/${originalUsername}`,
-          error: true,
-          last_checked_at: new Date().toISOString(),
-          bio: null,
-          followers_count: null,
-          banner_image: null,
-          live_category: null,
-          social_links: {},
-          isLoading: false,
-       };
-    }
-    
-    if (!response.ok) {
-      throw new Error(`API error for ${originalUsername}: ${response.status}`);
-    }
-    
-    const data = await response.json();
-
-    if (!data.user) {
-        throw new Error(`User data not found for: ${originalUsername}`);
-    }
-
-    const isLive = data.livestream !== null;
-
-    let lastStreamStartTime = null;
-    if (!isLive) {
-      try {
-        const videosUrl = `https://kick.com/api/v2/channels/${originalUsername}/videos?_=${Date.now()}`;
-        // Using a CORS proxy to bypass client-side fetch restrictions.
-        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(videosUrl)}`;
-        const videosResponse = await fetchWithTimeout(proxyUrl, {}, 8000); 
-        if (videosResponse.ok) {
-          const videosData = await videosResponse.json();
-          if (videosData && videosData.length > 0 && videosData[0].created_at) {
-            lastStreamStartTime = videosData[0].created_at;
-          }
-        }
-      } catch (videoError: any) {
-        // Silent catch for video errors
-      }
-    }
-    
-    // Fallback if video fetch fails or returns no videos
-    if (!lastStreamStartTime && !isLive && data.previous_livestreams && data.previous_livestreams.length > 0) {
-      lastStreamStartTime = data.previous_livestreams[0].start_time;
-    }
-
-    const socialLinks: { [key: string]: string } = {};
-    if (data.user?.twitter) socialLinks.twitter = data.user.twitter;
-    if (data.user?.youtube) socialLinks.youtube = data.user.youtube;
-    if (data.user?.instagram) socialLinks.instagram = data.user.instagram;
-    if (data.user?.discord) socialLinks.discord = data.user.discord;
-
-    // Robust follower count extraction
-    // Check root, camelCase root, or inside user object
-    const followersCount = data.followers_count ?? data.followersCount ?? data.user?.followers_count ?? 0;
-
-    return {
-      username: originalUsername,
-      display_name: originalUsername,
-      profile_pic: data.user.profile_pic || DEFAULT_PROFILE_PIC,
-      is_live: isLive,
-      live_title: data.livestream?.session_title || null,
-      viewer_count: data.livestream?.viewer_count ?? null,
-      live_since: data.livestream?.start_time || null,
-      last_stream_start_time: lastStreamStartTime,
-      live_url: `https://kick.com/${originalUsername}`,
-      profile_url: `https://kick.com/${originalUsername}`,
-      bio: data.user.bio || null,
-      followers_count: Number(followersCount),
-      banner_image: data.banner_image?.url || null,
-      live_category: data.livestream?.category?.name || null,
-      social_links: socialLinks,
-      isLoading: false,
-      last_checked_at: new Date().toISOString(),
-    };
-  } catch (error: any) {
-    // Return a default error state for this channel so the UI can handle it gracefully
-    return {
-      username: originalUsername,
-      display_name: originalUsername,
+const getSafeChannelObj = (username: string, error = false): Channel => ({
+      username: username,
+      display_name: username,
       profile_pic: DEFAULT_PROFILE_PIC,
       is_live: false,
       live_title: null,
       viewer_count: null,
       live_since: null,
       last_stream_start_time: null,
-      live_url: `https://kick.com/${originalUsername}`,
-      profile_url: `https://kick.com/${originalUsername}`,
-      error: true, // Flag for the UI
+      live_url: `https://kick.com/${username}`,
+      profile_url: `https://kick.com/${username}`,
+      error: error,
       last_checked_at: new Date().toISOString(),
       bio: null,
       followers_count: null,
@@ -157,29 +68,117 @@ export const fetchKickChannel = async (originalUsername: string): Promise<Channe
       live_category: null,
       social_links: {},
       isLoading: false,
-    };
+});
+
+/**
+ * Fetches data for a single Kick channel using multi-proxy rotation.
+ */
+export const fetchKickChannel = async (originalUsername: string): Promise<Channel> => {
+  const timestamp = Date.now();
+  // We append a timestamp to the Kick URL to prevent the Proxy from returning cached stale data
+  const targetUrl = `https://kick.com/api/v1/channels/${originalUsername}?_=${timestamp}`;
+  
+  let data: any = null;
+  let usedProxyIndex = -1;
+
+  // 1. Try fetching main channel data using proxy rotation
+  for (let i = 0; i < PROXY_LIST.length; i++) {
+      try {
+          const proxyUrl = PROXY_LIST[i](targetUrl);
+          // 6s timeout per proxy to allow failover reasonably quickly
+          const response = await fetchWithTimeout(proxyUrl, {}, 6000); 
+          
+          if (response.status === 404) {
+              // Valid 404 from Kick means user doesn't exist. Don't retry.
+              return getSafeChannelObj(originalUsername, false);
+          }
+
+          if (!response.ok) continue; // Server error or proxy error, try next
+
+          const json = await response.json();
+          if (json && json.user) {
+              data = json;
+              usedProxyIndex = i;
+              break; // Success!
+          }
+      } catch (e) {
+          // Network error or timeout, try next proxy
+          continue;
+      }
+  }
+
+  // If no data found after all proxies
+  if (!data) {
+      console.warn(`All proxies failed for ${originalUsername}`);
+      return getSafeChannelObj(originalUsername, true);
+  }
+
+  // 2. Process Data
+  try {
+      const isLive = data.livestream !== null;
+      let lastStreamStartTime = null;
+
+      // Try fetching previous livestreams/videos if not live to get "Last Seen" data
+      if (!isLive) {
+          // Use the proxy that worked for the main request, or fallback to first
+          const proxyFn = usedProxyIndex >= 0 ? PROXY_LIST[usedProxyIndex] : PROXY_LIST[0];
+          
+          // Strategy A: Check data.previous_livestreams (often included in channel payload)
+          if (data.previous_livestreams && data.previous_livestreams.length > 0) {
+              lastStreamStartTime = data.previous_livestreams[0].start_time;
+          } else {
+               // Strategy B: Fetch videos endpoint
+               try {
+                   const videosUrl = `https://kick.com/api/v2/channels/${originalUsername}/videos?_=${timestamp}`;
+                   const vResponse = await fetchWithTimeout(proxyFn(videosUrl), {}, 5000);
+                   if (vResponse.ok) {
+                       const vData = await vResponse.json();
+                       if (vData && vData.length > 0) {
+                           lastStreamStartTime = vData[0].created_at;
+                       }
+                   }
+               } catch (e) { /* ignore video fetch error, it's optional data */ }
+          }
+      }
+
+      const socialLinks: { [key: string]: string } = {};
+      if (data.user?.twitter) socialLinks.twitter = data.user.twitter;
+      if (data.user?.youtube) socialLinks.youtube = data.user.youtube;
+      if (data.user?.instagram) socialLinks.instagram = data.user.instagram;
+      if (data.user?.discord) socialLinks.discord = data.user.discord;
+      if (data.user?.tiktok) socialLinks.tiktok = data.user.tiktok;
+
+      const followersCount = data.followers_count ?? data.followersCount ?? data.user?.followers_count ?? 0;
+
+      return {
+          username: originalUsername,
+          display_name: data.user.username || originalUsername, 
+          profile_pic: data.user.profile_pic || DEFAULT_PROFILE_PIC,
+          is_live: isLive,
+          live_title: data.livestream?.session_title || null,
+          viewer_count: data.livestream?.viewer_count ?? null,
+          live_since: data.livestream?.start_time || null,
+          last_stream_start_time: lastStreamStartTime,
+          live_url: `https://kick.com/${originalUsername}`,
+          profile_url: `https://kick.com/${originalUsername}`,
+          bio: data.user.bio || null,
+          followers_count: Number(followersCount),
+          banner_image: data.banner_image?.url || null,
+          live_category: data.livestream?.category?.name || null,
+          social_links: socialLinks,
+          isLoading: false,
+          last_checked_at: new Date().toISOString(),
+      };
+
+  } catch (error) {
+      console.error(`Error processing data for ${originalUsername}`, error);
+      return getSafeChannelObj(originalUsername, true);
   }
 };
 
 /**
- * Fetches statuses for multiple Kick channels in parallel.
- * @deprecated Use fetchKickChannel in a loop in App.tsx for better control over rate limits and incremental loading.
+ * Legacy support
  */
-export const fetchChannelStatuses = async (streamers: { username: string; tags: string[]; character: string }[]): Promise<KickApiResponse> => {
-  const channelDataPromises = streamers.map(async (streamerConfig) => {
-    const username = extractUsername(streamerConfig.username);
-    const channelData = await fetchKickChannel(username);
-    return {
-      ...channelData,
-      // Merge original metadata from the constants file
-      tags: streamerConfig.tags,
-      character: streamerConfig.character,
-    };
-  });
-  const results = await Promise.all(channelDataPromises);
-
-  return {
-    checked_at: new Date().toISOString(),
-    data: results,
-  };
+export const fetchChannelStatuses = async (streamers: any[]) => {
+    return { checked_at: new Date().toISOString(), data: [] };
 };

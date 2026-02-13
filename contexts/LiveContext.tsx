@@ -6,9 +6,9 @@ import { robustFetch } from '../utils/apiWrapper';
 import { fetchKickChannel } from '../services/KickService';
 
 // --- CONFIGURATION CONSTANTS ---
-const REFRESH_INTERVAL_MS = 60000; // How many seconds it waits to bring the number of streamers again (Total Refresh)
-const BATCH_SIZE = 2;              // How many streamers it must bring in one go
-const BATCH_DELAY_MS = 500;        // The delay between every fetch and another (0.5 seconds)
+const REFRESH_INTERVAL_MS = 60000; // Total Refresh every 60s
+const BATCH_SIZE = 2;              // Fetch 2 streamers at a time
+const BATCH_DELAY_MS = 800;        // Increased to 800ms to be gentler on proxies
 
 interface LiveContextType {
     streamers: Streamer[];
@@ -78,25 +78,10 @@ export const LiveProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // Batch Processor using KickService with Retries
     const runBatchFetching = async (allStreamers: Streamer[]) => {
-        const fetchWithRetry = async (username: string) => {
-            let attempts = 0;
-            const maxAttempts = 3;
-            
-            while (attempts < maxAttempts) {
-                try {
-                    const data = await fetchKickChannel(username);
-                    if (!data.error) return data;
-                    
-                    // If error, wait and retry
-                    attempts++;
-                    if (attempts < maxAttempts) await new Promise(r => setTimeout(r, 1000));
-                } catch (e) {
-                    attempts++;
-                    if (attempts < maxAttempts) await new Promise(r => setTimeout(r, 1000));
-                }
-            }
-            // Fallback
-            return await fetchKickChannel(username).catch(() => null);
+        // Helper to fetch single streamer
+        // Note: fetchKickChannel now handles multi-proxy rotation internally
+        const fetchStreamerData = async (username: string) => {
+            return await fetchKickChannel(username);
         };
 
         for (let i = 0; i < allStreamers.length; i += BATCH_SIZE) {
@@ -104,8 +89,8 @@ export const LiveProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             
             // Process batch in parallel
             await Promise.all(batch.map(async (streamer) => {
-                const data = await fetchWithRetry(streamer.kickUsername);
-                if (data) {
+                const data = await fetchStreamerData(streamer.kickUsername);
+                if (data && !data.error) {
                     setStreamers(prev => {
                         const index = prev.findIndex(s => s.id === streamer.id);
                         if (index === -1) return prev;
@@ -214,7 +199,7 @@ export const LiveProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return true;
     };
 
-    // API Functions
+    // API Functions (Mocked for Client Side)
     const submitStreamerRequest = async (username: string, tags: string, characters: string) => {
         const res = await robustFetch('/streamrequest/add', {
             method: 'POST',
