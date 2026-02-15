@@ -5,6 +5,7 @@ import { Streamer } from '../types';
 import { GlassCard } from '../components/ui/GlassCard';
 import { RobustImage } from '../components/ui/RobustImage';
 import { motion } from 'framer-motion';
+import { useLive } from '../contexts/LiveContext';
 
 // --- SKELETON CARD ---
 const StreamerCardSkeleton: React.FC = () => (
@@ -24,6 +25,36 @@ const StreamerCardSkeleton: React.FC = () => (
     </GlassCard>
 );
 
+// --- ERROR CARD ---
+const StreamerErrorCard: React.FC<{ streamer: Streamer, onRetry: () => void }> = ({ streamer, onRetry }) => {
+    const [retrying, setRetrying] = React.useState(false);
+
+    const handleRetry = async (e: React.MouseEvent) => {
+        e.stopPropagation();
+        setRetrying(true);
+        await onRetry();
+        setRetrying(false);
+    };
+
+    return (
+         <GlassCard className="flex flex-col items-center justify-center h-full border border-red-500/20 bg-red-900/5 gap-4 min-h-[200px]">
+            <Icons.Wifi className="w-8 h-8 text-red-500/50" />
+            <div className="text-center">
+                <h3 className="font-bold text-white mb-1">{streamer.kickUsername}</h3>
+                <p className="text-xs text-red-400">Failed to load</p>
+            </div>
+            <button 
+                onClick={handleRetry}
+                disabled={retrying}
+                className="flex items-center gap-2 px-4 py-2 bg-red-500/20 hover:bg-red-500/40 text-red-300 rounded-full text-xs font-bold transition-all disabled:opacity-50"
+            >
+                <Icons.Search className={`w-3 h-3 ${retrying ? 'animate-spin' : ''}`} />
+                {retrying ? 'Retrying...' : 'Reload'}
+            </button>
+         </GlassCard>
+    );
+};
+
 // --- STREAMER CARD ---
 export const StreamerCard: React.FC<{ 
     streamer: Streamer, 
@@ -33,6 +64,14 @@ export const StreamerCard: React.FC<{
     snowEnabled: boolean 
 }> = ({ streamer, onClick, onToggleFavorite, onToggleNotify, snowEnabled }) => {
     const { t } = useI18n();
+    const { retryStreamer } = useLive();
+
+    // Check for error state first
+    if (streamer.error) {
+        return <StreamerErrorCard streamer={streamer} onRetry={() => retryStreamer(streamer.id)} />;
+    }
+
+    // Check for loading state (no data yet)
     if (!streamer.kickData) return <StreamerCardSkeleton />;
 
     const isLive = streamer.streamData?.is_live;

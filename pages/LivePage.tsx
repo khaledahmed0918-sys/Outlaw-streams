@@ -27,20 +27,31 @@ const SkeletonGrid = () => (
 
 export const LivePage: React.FC<{ snowEnabled: boolean, isAdmin: boolean }> = ({ snowEnabled }) => {
     const { t, dir } = useI18n();
-    const { streamers, loading, toggleFavorite, toggleNotify } = useLive();
+    const { streamers, loading, toggleFavorite, toggleNotify, retryFailed } = useLive();
     
     const [search, setSearch] = useState('');
     const [selectedStreamer, setSelectedStreamer] = useState<Streamer | null>(null);
+    const [retryingAll, setRetryingAll] = useState(false);
 
     const filteredStreamers = streamers.filter(s => 
         !search || (s.kickUsername || '').toLowerCase().includes(search.toLowerCase())
     );
 
+    const hasErrors = streamers.some(s => s.error);
+
+    const handleRetryAll = async () => {
+        setRetryingAll(true);
+        await retryFailed();
+        setRetryingAll(false);
+    };
+
     return (
         <div className="w-full max-w-7xl mx-auto flex flex-col gap-8 relative min-h-[600px] pb-24">
-            {/* Control Bar - Search */}
-            <div className="flex justify-center">
-                <div className="w-full max-w-2xl relative group">
+            {/* Top Control Bar */}
+            <div className="flex flex-col md:flex-row justify-center items-center gap-4 relative z-20">
+                
+                {/* Search Bar */}
+                <div className="w-full max-w-2xl relative group order-2 md:order-1">
                     <div className="absolute inset-0 bg-cyan-500/10 rounded-full blur-xl group-hover:bg-cyan-500/20 transition-all duration-500"></div>
                     <div className="relative bg-black/60 backdrop-blur-xl border border-white/10 rounded-full flex items-center shadow-2xl transition-all duration-300 focus-within:border-cyan-500/50 focus-within:bg-black/80">
                         <Icons.Search className={`absolute text-gray-400 w-5 h-5 ${dir==='rtl' ? 'right-6' : 'left-6'}`} />
@@ -57,6 +68,18 @@ export const LivePage: React.FC<{ snowEnabled: boolean, isAdmin: boolean }> = ({
                         )}
                     </div>
                 </div>
+
+                {/* Reload All Button - Only shows if there are errors */}
+                {hasErrors && (
+                    <button 
+                        onClick={handleRetryAll} 
+                        disabled={retryingAll}
+                        className="order-1 md:order-2 flex items-center gap-2 px-6 py-3.5 bg-red-600/10 hover:bg-red-600/20 border border-red-500/50 hover:border-red-500 text-red-400 rounded-full font-bold transition-all disabled:opacity-50 whitespace-nowrap"
+                    >
+                        <Icons.Wifi className={`w-4 h-4 ${retryingAll ? 'animate-pulse' : ''}`} />
+                        {retryingAll ? 'Retrying Failed...' : 'Reload Failed'}
+                    </button>
+                )}
             </div>
 
             {/* Content Area */}

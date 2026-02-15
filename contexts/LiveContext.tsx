@@ -8,7 +8,8 @@ import { fetchKickChannel } from '../services/KickService';
 // --- CONFIGURATION CONSTANTS ---
 const REFRESH_INTERVAL_MS = 60000; // Total Refresh every 60s
 const BATCH_SIZE = 2;              // Fetch 2 streamers at a time
-const BATCH_DELAY_MS = 800;        // Increased to 800ms to be gentler on proxies
+// Default delay, but now we use dynamic delay based on success/failure
+const MIN_BATCH_DELAY_MS = 1200;   
 
 interface LiveContextType {
     streamers: Streamer[];
@@ -23,6 +24,8 @@ interface LiveContextType {
     deleteStreamerRequest: (id: string) => Promise<void>;
     addLocalStreamer: (streamer: Streamer) => void;
     loadBatch: (start: number, count: number) => Promise<void>;
+    retryStreamer: (id: string) => Promise<void>;
+    retryFailed: () => Promise<void>;
 }
 
 const LiveContext = createContext<LiveContextType | null>(null);
@@ -37,8 +40,8 @@ export const LiveProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const sortStreamers = useCallback((list: Streamer[]) => {
         return [...list].sort((a, b) => {
             // 1. Data Loaded Status (Bubbles loaded cards to top)
-            const aLoaded = !!a.kickData;
-            const bLoaded = !!b.kickData;
+            const aLoaded = !!a.kickData && !a.error;
+            const bLoaded = !!b.kickData && !b.error;
             if (aLoaded !== bLoaded) return aLoaded ? -1 : 1;
 
             // 2. Favorites
@@ -79,7 +82,7 @@ export const LiveProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Batch Processor using KickService with Retries
     const runBatchFetching = async (allStreamers: Streamer[]) => {
         // Helper to fetch single streamer
-        // Note: fetchKickChannel now handles multi-proxy rotation internally
+        // Note: fetchKickChannel now handles multi-proxy rotation and retries internally
         const fetchStreamerData = async (username: string) => {
             return await fetchKickChannel(username);
         };
@@ -87,57 +90,107 @@ export const LiveProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         for (let i = 0; i < allStreamers.length; i += BATCH_SIZE) {
             const batch = allStreamers.slice(i, i + BATCH_SIZE);
             
+            let batchHasError = false;
+
             // Process batch in parallel
             await Promise.all(batch.map(async (streamer) => {
                 const data = await fetchStreamerData(streamer.kickUsername);
-                if (data && !data.error) {
-                    setStreamers(prev => {
-                        const index = prev.findIndex(s => s.id === streamer.id);
-                        if (index === -1) return prev;
-
-                        // Map Channel to Streamer structure
-                        const updatedStreamer: Streamer = {
-                            ...prev[index],
-                            kickData: {
-                                id: 0,
-                                slug: data.username,
-                                user_id: 0,
-                                username: data.display_name,
-                                profile_pic: data.profile_pic,
-                                banner: data.banner_image || '',
-                                followers_count: data.followers_count || 0,
-                                created_at: '',
-                                bio: data.bio || ''
-                            },
-                            streamData: {
-                                id: 0,
-                                is_live: data.is_live,
-                                viewers: data.viewer_count || 0,
-                                start_time: data.live_since || data.last_stream_start_time || '',
-                                title: data.live_title || '',
-                                category_name: data.live_category || '',
-                                category_icon: '',
-                                thumbnail: ''
-                            },
-                            // Merge Social Links
-                            links: {
-                                ...prev[index].links,
-                                ...data.social_links as StreamerLinks
-                            },
-                            lastUpdated: Date.now()
-                        };
-
-                        const newList = [...prev];
-                        newList[index] = updatedStreamer;
-                        return sortStreamers(newList);
-                    });
+                
+                // Check for error in response to adjust rate limit
+                if (data.error) {
+                    batchHasError = true;
                 }
+
+                setStreamers(prev => {
+                    const index = prev.findIndex(s => s.id === streamer.id);
+                    if (index === -1) return prev;
+
+                    // Map Channel to Streamer structure
+                    const updatedStreamer: Streamer = {
+                        ...prev[index],
+                        error: data.error, // Track error state
+                        kickData: data.error ? undefined : {
+                            id: 0,
+                            slug: data.username,
+                            user_id: 0,
+                            username: data.display_name,
+                            profile_pic: data.profile_pic,
+                            banner: data.banner_image || '',
+                            followers_count: data.followers_count || 0,
+                            created_at: '',
+                            bio: data.bio || ''
+                        },
+                        streamData: data.error ? undefined : {
+                            id: 0,
+                            is_live: data.is_live,
+                            viewers: data.viewer_count || 0,
+                            start_time: data.live_since || data.last_stream_start_time || '',
+                            title: data.live_title || '',
+                            category_name: data.live_category || '',
+                            category_icon: '',
+                            thumbnail: ''
+                        },
+                        // Merge Social Links
+                        links: data.error ? prev[index].links : {
+                            ...prev[index].links,
+                            ...data.social_links as StreamerLinks
+                        },
+                        lastUpdated: Date.now()
+                    };
+
+                    const newList = [...prev];
+                    newList[index] = updatedStreamer;
+                    return sortStreamers(newList);
+                });
             }));
 
             if (i + BATCH_SIZE < allStreamers.length) {
-                await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
+                // Dynamic Rate Limiting
+                const dynamicDelay = batchHasError ? 3500 : MIN_BATCH_DELAY_MS;
+                await new Promise(resolve => setTimeout(resolve, dynamicDelay));
             }
         }
+    };
+
+    // Retry a specific streamer immediately
+    const retryStreamer = async (id: string) => {
+        setStreamers(prev => prev.map(s => s.id === id ? { ...s, kickData: undefined, error: undefined } : s));
+        const data = await fetchKickChannel(id);
+        
+        setStreamers(prev => {
+            const index = prev.findIndex(s => s.id === id);
+            if (index === -1) return prev;
+            
+            const updatedStreamer: Streamer = {
+                ...prev[index],
+                error: data.error,
+                kickData: data.error ? undefined : {
+                    id: 0, slug: data.username, user_id: 0, username: data.display_name,
+                    profile_pic: data.profile_pic, banner: data.banner_image || '',
+                    followers_count: data.followers_count || 0, created_at: '', bio: data.bio || ''
+                },
+                streamData: data.error ? undefined : {
+                    id: 0, is_live: data.is_live, viewers: data.viewer_count || 0,
+                    start_time: data.live_since || data.last_stream_start_time || '',
+                    title: data.live_title || '', category_name: data.live_category || '', category_icon: '', thumbnail: ''
+                },
+                links: data.error ? prev[index].links : { ...prev[index].links, ...data.social_links as StreamerLinks },
+                lastUpdated: Date.now()
+            };
+            
+            const newList = [...prev];
+            newList[index] = updatedStreamer;
+            return sortStreamers(newList);
+        });
+    };
+
+    // Retry all failed streamers
+    const retryFailed = async () => {
+        const failedStreamers = streamers.filter(s => s.error);
+        // Reset their state to loading first
+        setStreamers(prev => prev.map(s => s.error ? { ...s, error: undefined, kickData: undefined } : s));
+        // Process them through the batch system
+        await runBatchFetching(failedStreamers);
     };
 
     useEffect(() => {
@@ -244,17 +297,18 @@ export const LiveProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                     if(idx === -1) return prev;
                     const updated = {
                         ...prev[idx],
-                        kickData: {
+                        error: data.error,
+                        kickData: data.error ? undefined : {
                             id: 0, slug: data.username, user_id: 0, username: data.display_name,
                             profile_pic: data.profile_pic, banner: data.banner_image || '',
                             followers_count: data.followers_count || 0, created_at: '', bio: data.bio || ''
                         },
-                        streamData: {
+                        streamData: data.error ? undefined : {
                             id: 0, is_live: data.is_live, viewers: data.viewer_count || 0,
                             start_time: data.live_since || '', title: data.live_title || '',
                             category_name: data.live_category || '', category_icon: '', thumbnail: ''
                         },
-                        links: { ...prev[idx].links, ...data.social_links as StreamerLinks }
+                        links: data.error ? prev[idx].links : { ...prev[idx].links, ...data.social_links as StreamerLinks }
                     };
                     const list = [...prev];
                     list[idx] = updated;
@@ -280,7 +334,9 @@ export const LiveProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             getStreamerRequests,
             acceptStreamerRequest,
             deleteStreamerRequest,
-            addLocalStreamer
+            addLocalStreamer,
+            retryStreamer,
+            retryFailed
         }}>
             {children}
         </LiveContext.Provider>

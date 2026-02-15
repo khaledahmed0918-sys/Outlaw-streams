@@ -32,14 +32,16 @@ export const RobustImage: React.FC<RobustImageProps> = ({
         timeoutRef.current = setTimeout(() => {
             setErrorCount(prev => prev + 1);
             // Append timestamp to bust cache/force reload if network failed
-            const separator = src?.includes('?') ? '&' : '?';
-            setImgSrc(`${src}${separator}retry=${Date.now()}`);
+            if (typeof src === 'string') {
+                const separator = src.includes('?') ? '&' : '?';
+                setImgSrc(`${src}${separator}retry=${Date.now()}`);
+            }
         }, retryDelay);
     };
 
     return (
         <img 
-            src={imgSrc} 
+            src={imgSrc as string} 
             onError={handleError}
             className={`${className} ${isCircular ? 'rounded-full !aspect-square object-cover' : ''} transition-opacity duration-300`}
             loading="eager" // Load immediately, do not lazy load to prevent "cutting"

@@ -44,6 +44,7 @@ export interface Streamer {
   streamData?: KickStreamInfo;
   links?: StreamerLinks;
   customTitle?: string;
+  error?: boolean; // Added to track fetch failures
 }
 
 export interface Channel {

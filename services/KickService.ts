@@ -5,7 +5,7 @@ import type { Channel, KickApiResponse } from '../types';
 // Kick's API is protected by Cloudflare. Direct client-side calls often fail (CORS).
 // We use a rotation of CORS proxies to attempt to bypass this.
 
-const DEFAULT_PROFILE_PIC = 'https://picsum.photos/150/150';
+const DEFAULT_PROFILE_PIC = 'https://i.postimg.cc/vH9VNdH8/IMG-8915.jpg';
 
 // List of proxies to try in order. 
 // "corsproxy.io" is usually best but can be blocked.
@@ -24,6 +24,11 @@ export const extractUsername = (input: string): string => {
     }
     return input;
 };
+
+/**
+ * Helper to wait for a specified duration
+ */
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * Helper to fetch with timeout
@@ -93,7 +98,12 @@ export const fetchKickChannel = async (originalUsername: string): Promise<Channe
               return getSafeChannelObj(originalUsername, false);
           }
 
-          if (!response.ok) continue; // Server error or proxy error, try next
+          if (!response.ok) {
+              // If proxy fails or returns bad status, wait a bit before trying next proxy
+              // This implements the "stop 2-3 seconds" logic for failed attempts
+              await wait(2500); 
+              continue; 
+          }
 
           const json = await response.json();
           if (json && json.user) {
@@ -102,7 +112,8 @@ export const fetchKickChannel = async (originalUsername: string): Promise<Channe
               break; // Success!
           }
       } catch (e) {
-          // Network error or timeout, try next proxy
+          // Network error or timeout, wait and try next proxy
+          await wait(2500);
           continue;
       }
   }

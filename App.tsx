@@ -12,7 +12,12 @@ const AppContent: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-neutral-950 flex flex-col relative overflow-x-hidden selection:bg-cyan-500 selection:text-black">
-      {/* Background Ambience removed for performance as requested */}
+      
+      {/* Background Ambience - Light Cyan Gradient with Blur */}
+      <div className="fixed inset-0 pointer-events-none z-0">
+          <div className="absolute top-0 right-0 w-[800px] h-[600px] bg-cyan-900/10 rounded-full blur-[120px] mix-blend-screen opacity-50"></div>
+          <div className="absolute bottom-0 left-0 w-[600px] h-[600px] bg-cyan-800/10 rounded-full blur-[100px] mix-blend-screen opacity-30"></div>
+      </div>
       
       <Navbar currentTab={currentTab} setTab={setTab} />
 

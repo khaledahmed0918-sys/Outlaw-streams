@@ -27,7 +27,7 @@ export const defaultStreamersList = [
   "https://kick.com/7arith",
   "https://kick.com/S0VE",
   "https://kick.com/idew",
-  "http://kick.com/id7d7",
+  "https://kick.com/id7d7",
   "https://kick.com/1saadx",
   "https://kick.com/fttir",
   "https://kick.com/Dahrooj",
@@ -46,7 +46,19 @@ export const defaultStreamersList = [
   "https://kick.com/lsalman",
   "https://kick.com/il7rkaz",
   "https://kick.com/osamaaah",
-  "https://kick.com/alqallaf"
+  "https://kick.com/alqallaf",
+  "https://kick.com/imod",
+  "https://kick.com/abu_samrah",
+  "https://kick.com/uhaj",
+  "https://kick.com/1beki",
+  "https://kick.com/xellily",
+  "https://kick.com/hessa_ha",
+  "https://kick.com/iHIMO",
+  "https://kick.com/iaz00zi",
+  "https://kick.com/jlaad",
+  "https://kick.com/iiryoof",
+  "https://kick.com/mjbor",
+  "https://kick.com/fwaz"
 ];
 
 export const Icons = {
