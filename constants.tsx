@@ -63,7 +63,13 @@ export const defaultStreamersList = [
   "https://kick.com/7qof",
   "https://kick.com/perfct",
   "https://kick.com/r3dulz",
-  "https://kick.com/ltxmax"
+  "https://kick.com/ltxmax",
+  "https://kick.com/aboalfz",
+  "https://kick.com/SKY7C",
+  "https://kick.com/suul3",
+  "https://kick.com/sxb",
+  "https://kick.com/lunedee",
+  "https://kick.com/mo7x"
 ];
 
 export const Icons = {
